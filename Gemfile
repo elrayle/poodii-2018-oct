@@ -11,3 +11,5 @@ gem 'rerun'
 # Option 2 for running the tests:
 # gem 'guard'
 # gem 'guard-shell'
+
+gem 'byebug'
