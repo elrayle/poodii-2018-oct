@@ -1,21 +1,31 @@
+require 'byebug'
+
 class Game
   attr_reader :input, :output
   def initialize(input: $stdin, output: $stdout)
     @input  = input
     @output = output
-    initialize_players
+    @players = initialize_players
   end
 
   def play
     output.print "\n\nFee now starting frame 1"
+    1.upto(10) do |frame_idx|
+      @players.each do |player|
+        until(player.turn_done?(frame_idx))
+          @output.print "\n  Enter roll for #{player.name}: "
+          pinfall = listen("0").to_i
+          player.roll(pinfall: pinfall)
+        end
+        # player.score(output)
+      end
+    end
   end
 
   def initialize_players
-    [].tap {|players|
-      get_player_names.each {|name|
-        type = get_player_game_type(name)
-
-      }
+    get_player_names.map { |name|
+      type = get_player_game_type(name)
+      Player.new(name: name, gametype: type)
     }
   end
 
@@ -34,6 +44,29 @@ class Game
   end
 end
 
+class Player
+  attr_reader :rolls, :name, :gametype
+
+  def initialize(gametype:, name:)
+    @name = name
+    @gametype = gametype.to_sym
+    @rolls = []
+  end
+
+  def roll(pinfall:)
+    rolls << pinfall
+  end
+
+  def turn_done?(frame_idx)
+    frames = Frames.for(rolls: rolls, config: Variant::CONFIGS[gametype])
+    frames.present? && frames[frame_idx].done?
+  end
+
+  def score(io)
+    frames = Frames.for(rolls: rolls, config: Variant::CONFIGS[gametype])
+    DetailedScoresheet.new(frames: frames, io: io).render
+  end
+end
 
 #####################################################################
 class Frames
@@ -63,8 +96,24 @@ class Frames
     list.each {|frame| yield frame}
   end
 
+  def [](idx)
+    list[idx-1]
+  end
+
+  def last
+    list.last
+  end
+
   def size
     list.size
+  end
+
+  def empty?
+    list.empty?
+  end
+
+  def present?
+    !empty?
   end
 end
 
@@ -79,13 +128,31 @@ class Frame
 
   def score
     (normal_rolls + bonus_rolls).sum
+    # raise Exception, 'Abstract'
+  end
+
+  def running_score(previous)
+    previous.to_i + score
+    # raise Exception, 'Abstract'
+  end
+end
+
+# Frame has all rolls and can be scored (e.g. open frames, spares and strikes with enough following frames)
+class CompleteFrame < Frame
+  def score
+    (normal_rolls + bonus_rolls).sum
   end
 
   def running_score(previous)
     previous.to_i + score
   end
+
+  def done?
+    true
+  end
 end
 
+# Frame has all rolls but cannot be scored (e.g. spares and strikes without enough following frames)
 class PendingFrame < Frame
   def score
     nil
@@ -93,6 +160,40 @@ class PendingFrame < Frame
 
   def running_score(previous)
     nil
+  end
+
+  def done?
+    true
+  end
+end
+
+# Frame does not have all rolls
+class PartialFrame < Frame
+  def score
+    nil
+  end
+
+  def running_score(previous)
+    nil
+  end
+
+  def done?
+    false
+  end
+end
+
+# Frame has 0 rolls
+class UnbowledFrame < Frame
+  def score
+    nil
+  end
+
+  def running_score(previous)
+    nil
+  end
+
+  def done?
+    false
   end
 end
 
@@ -201,12 +302,15 @@ class Variant
       num_triggering_rolls, num_rolls_to_score, roll_scores = parse(remaining_rolls)
 
       frame_class =
-        if remaining_rolls.size >=  num_rolls_to_score
-          Frame
-        else
+        if remaining_rolls.empty? # Unbowled = 0 balls bowled in this frame
+          UnbowledFrame
+        elsif remaining_rolls.size < num_triggering_rolls # Partial = Not enough balls in this frame
+          PartialFrame
+        elsif remaining_rolls.size >=  num_rolls_to_score  # Complete = Strike that is scored, Spare that is scored, Open with max_rolls_per_turn
+          CompleteFrame
+        else # Pending = Strike without bonus balls, Spare without bonus balls
           PendingFrame
         end
-
       normal = roll_scores.take(num_triggering_rolls)
       bonus  = roll_scores[num_triggering_rolls...num_rolls_to_score] || []
 
